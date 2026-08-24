@@ -256,7 +256,7 @@ def runit(device='cpu'):
     # Start recording memory snapshot history, initialized with a buffer
     # capacity of 100,000 memory events, via the `max_entries` field.
     # MAX_NUM_OF_MEM_EVENTS_PER_SNAPSHOT = 100_000
-    if export_pickle:
+    if export_pickle and torch.cuda.is_available():
         torch.cuda.memory._record_memory_history(
         # max_entries=MAX_NUM_OF_MEM_EVENTS_PER_SNAPSHOT
         )
@@ -561,7 +561,8 @@ def runit(device='cpu'):
                 # waveforms[f'effq_fine_grain_tpc{tpcdataset.tpc_id}_batch{ibatch}'] = qbd_fg
                 # waveforms[f'effq_fine_grain_tpc{tpcdataset.tpc_id}_batch{ibatch}_location'] = qbl
 
-                torch.cuda.reset_peak_memory_stats()
+                if torch.cuda.is_available():
+                    torch.cuda.reset_peak_memory_stats()
             except IndexError as e:
                 raise e
 
@@ -607,10 +608,10 @@ def runit(device='cpu'):
         if export_pickle:
             torch.cuda.memory._dump_snapshot(f"graph_effq.pickle")
     except Exception as e:
-        logger.error(f"Failed to capture memory snapshot {e}")
-    torch.cuda.memory._record_memory_history(enabled=None)
-
-    info(f"Peak memory usage {torch.cuda.max_memory_allocated()/1024**2:.2f} MB")
+        warning(f"Failed to capture memory snapshot {e}")
+    if torch.cuda.is_available():
+        torch.cuda.memory._record_memory_history(enabled=None)
+        info(f"Peak memory usage {torch.cuda.max_memory_allocated()/1024**2:.2f} MB")
 
 def plots(out):
     with torch.no_grad():
