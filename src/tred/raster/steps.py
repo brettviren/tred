@@ -770,7 +770,14 @@ def eval_qeff(Q, X0, X1, Sigma, offset, shape, origin, grid_spacing,
 
     charge = charge.view(Q.size(0), lmn_prod,  # batch, chanenel
                          shape[0], shape[1], shape[2])  # D1, D2, D3
-    # FIXME: the padding is only valid for interpolation points == 3
+    # padding='same' is symmetric only for an odd kernel.  The kernel's spatial
+    # extent here is the interpolation stencil (kernel.size()[3:], i.e. rst),
+    # NOT the quadrature order npoints (which is kernel.size()[:3], lmn).  The
+    # stencil is 3 for every supported configuration: _create_u1d_GL() returns
+    # a (npt, 3) tensor whatever npt is, and _create_u_block() raises if handed
+    # anything else.  So the odd-kernel requirement holds by construction.
+    # Asserted in tests/effq/test_padding_stencil.py; if the stencil ever
+    # becomes even, that padding must change to an explicit asymmetric pad.
     charge = torch.nn.functional.conv3d(charge, kernel, padding='same',
                                         groups=lmn_prod)
     charge = charge.sum(dim=1)
