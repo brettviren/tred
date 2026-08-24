@@ -228,6 +228,36 @@ def qeff_narrow_sigma_charge_loss():
     return _qeff([[1.0, 1.0, 1.0]], [[1.001, 1.0, 1.0]], [[0.05, 0.05, 0.05]], [1000.0])
 
 
+def qeff_recenter_batch():
+    '''
+    Pins what `recenter` actually does, for the tred-02x port.
+
+    `recenter` shifts each step's charge-box offset so a smaller box sits
+    centred inside the universal (batch-max) box.  It therefore has NO effect
+    on a single-step call, because reduce_to_universal() takes the max over the
+    batch and the shift comes out zero -- which is why it needs a batch of
+    differing box sizes to be observable at all.
+
+    `skippad` produces results identical to `recenter` because eval_qeff() never
+    reads it; see tred-02x.2 and tred-fgh.
+    '''
+    X0 = torch.tensor([[1.0, 1.0, 1.0], [5.0, 5.0, 5.0]], dtype=F64)
+    X1 = torch.tensor([[1.6, 1.4, 1.3], [5.1, 5.05, 5.05]], dtype=F64)
+    Sigma = torch.tensor([[0.4, 0.4, 0.2], [0.15, 0.15, 0.1]], dtype=F64)
+    Q = torch.tensor([1000.0, 1000.0], dtype=F64)
+    out = {}
+    for label, kwargs in (('default', {}), ('recenter', {'recenter': True}),
+                          ('skippad', {'skippad': True})):
+        qeff, offset = compute_qeff(
+            Q=Q, X0=X0, X1=X1, Sigma=Sigma, n_sigma=(3.0, 3.0, 3.0),
+            origin=(0, 0, 0), grid_spacing=torch.tensor(GRID, dtype=F64),
+            method='gauss_legendre', npoints=(2, 2, 2), **kwargs)
+        out[f'{label}_offset'] = offset.to(torch.int64)
+        out[f'{label}_shape'] = torch.tensor(list(qeff.shape), dtype=torch.int64)
+        out[f'{label}_sum'] = qeff.sum()
+    return out
+
+
 def qeff_quadrature_orders():
     '''Charge sum against quadrature order, at a ratio where order matters.'''
     out = {}
