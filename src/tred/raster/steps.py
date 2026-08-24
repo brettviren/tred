@@ -5,8 +5,66 @@ from ..types import index_dtype, MAX_INDEX, MIN_INDEX
 # from ..utils import to_tensor
 
 import logging
+import os
 
 logger = logging.getLogger('tred.raster.steps')
+
+
+# Optional torch.compile of the charge-model kernels.
+#
+# Those kernels are long elementwise expressions over broadcast tensors, and
+# peak rasterization memory is set by their intermediates rather than by the
+# result.  Letting inductor fuse the chain removes most of those intermediates.
+# Measured on CPU, float64, box 66x46x233 (tred-02x.12):
+#
+#     variant                 peak tensors    time
+#     @torch.jit.script            5.0        98 ms      <- default
+#     torch.compile(dynamic=True)  2.0        57 ms
+#
+# "peak tensors" is the slope of peak RSS against result size, i.e. how many
+# full-size tensors are live at once, so it is the multiplier that matters for
+# a big step.
+#
+# Off by default.  It costs a one-off ~5 s compile on first call, and inductor
+# is not available or reliable in every environment.  Enable with the
+# TRED_COMPILE_RASTER environment variable or set_compiled_kernels().
+#
+# dynamic=True is essential: with dynamic=False every new charge-box shape
+# triggers a fresh 2.6-4.2 s compile, and tred's box shapes vary per step.
+_COMPILE_KERNELS = os.environ.get('TRED_COMPILE_RASTER', '').lower() \
+    in ('1', 'true', 'yes', 'on')
+_compiled_kernels = {}
+
+
+def set_compiled_kernels(enable=True):
+    '''
+    Turn torch.compile of the charge-model kernels on or off.
+
+    Returns the previous setting.  Compilation happens lazily on the next call
+    and is cached, so toggling is cheap.
+    '''
+    global _COMPILE_KERNELS
+    was, _COMPILE_KERNELS = _COMPILE_KERNELS, bool(enable)
+    return was
+
+
+def _kernel(fn):
+    '''
+    Return fn, or a compiled version of it when compiled kernels are enabled.
+
+    Falls back to the plain function, with a warning, if compilation fails --
+    this is an optimization, never a correctness requirement.
+    '''
+    if not _COMPILE_KERNELS:
+        return fn
+    if fn not in _compiled_kernels:
+        try:
+            _compiled_kernels[fn] = torch.compile(fn, dynamic=True)
+        except Exception as err:      # inductor unavailable, unsupported, ...
+            logger.warning(f'torch.compile of {getattr(fn, "__name__", fn)} '
+                           f'failed, using the uncompiled kernel: {err}')
+            _compiled_kernels[fn] = fn
+    return _compiled_kernels[fn]
 
 DEFAULT_FLOAT_DTYPE = torch.float64
 
@@ -251,7 +309,7 @@ def qline_diff3D(Q, X0, X1, Sigma, x, y, z):
     sx, sy, sz = tuple(Sigma[:,i].view(shape_new) for i in range(3))
     Q = Q.view(shape_new)
     args = (Q, x0, y0, z0, x1, y1, z1, sx, sy, sz, x, y, z)
-    return qline_diff3D_script(*args)
+    return _kernel(qline_diff3D_script)(*args)
 
 
 @torch.jit.script
@@ -339,6 +397,15 @@ def qpoint_diff3D(Q, X0, X1, Sigma, x, y, z):
     x1, y1, z1 = tuple(X1[:, i].view(shape_new) for i in range(3))
     sx, sy, sz = tuple(Sigma[:, i].view(shape_new) for i in range(3))
     Q = Q.view(shape_new)
+    return _kernel(qpoint_diff3D_kernel)(Q, x0, y0, z0, x1, y1, z1, sx, sy, sz,
+                                        x, y, z)
+
+
+def qpoint_diff3D_kernel(Q, x0, y0, z0, x1, y1, z1, sx, sy, sz, x, y, z):
+    '''
+    The point-charge expression, split out so it can be routed through
+    _kernel() alongside qline_diff3D_script.  See tred-02x.12.
+    '''
     xc, yc, zc = (x0+x1)/2, (y0+y1)/2, (z0+z1)/2
     charge = Q / torch.pow(torch.tensor(2 * 3.1415926), 1.5) / sx / sy / sz \
         * torch.exp(- (x - xc)**2 / 2 / sx**2

@@ -30,6 +30,16 @@ tred = "tred.cli:cli"
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
+[tool.pytest.ini_options]
+# importlib import mode is required: several test basenames are duplicated
+# between tests/ and its subdirectories (test_blocking, test_chunking,
+# test_convo, test_indexing, test_partitioning, test_sparse), and the default
+# prepend mode cannot collect them.  See tred-5jz.
+addopts = "--import-mode=importlib"
+markers = [
+  "slow: takes seconds rather than milliseconds (deselect with -m 'not slow')",
+]
+
 [tool.uv.sources]
 torch = { index = "pytorch" }
 
