@@ -88,3 +88,14 @@ def fullsim(ctx, infile, outfile):
     from .plots.graph_effq import fullsim as tred_fullsim
     tred_fullsim(ctx.obj.get("config"), infile, outfile)
 
+
+
+@cli.command('train')
+@click.option('-i','--infile', default="test.hdf5")
+@click.pass_context
+def train(ctx, infile):
+    '''
+    Fit a physics parameter by gradient descent through the simulation.
+    '''
+    from .plots.graph_opt import train as tred_train
+    tred_train(ctx.obj.get("config"), infile)

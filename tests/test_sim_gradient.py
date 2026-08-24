@@ -154,3 +154,66 @@ def test_absorb_int_cast_blocks_charge_but_not_lifetime():
     q = torch.tensor([1000.0], requires_grad=True)
     out = absorb(q, torch.tensor([5.0]), torch.tensor(10.0))
     assert not out.requires_grad, 'the int cast should still detach charge'
+
+
+# --------------------------------------------------------------------------
+# Convergence: the acceptance criterion for tred-4pz.17, run on synthetic data
+# so it needs none of the study's HDF5 inputs.
+# --------------------------------------------------------------------------
+
+def _fit_lifetime(start, truth_lifetime=10.0, steps=60, lr=0.3, prune=False):
+    '''Adam on lifetime alone, exactly as graph_opt.train() does it.'''
+    response, (time, charge, tail, head) = _response(), _steps()
+
+    def build(lt):
+        lacing = torch.tensor([NIMPER, NIMPER, 1])
+        drifter = Drifter(diffusion=[0.1, 0.05, 0.05], lifetime=10.0,
+                          velocity=VELOCITY, target=0.0)
+        drifter.lifetime = nn.Parameter(torch.tensor(float(lt)), requires_grad=True)
+        sim = Sim(
+            Charge(drifter, Raster(velocity=VELOCITY, grid_spacing=GRID),
+                   ChunkSum((4 * NIMPER, 4 * NIMPER, 16),
+                            method='chunksum_differential', prune=prune)),
+            Current(LacedConvo(lacing, o_shape=(8, 8, 40)),
+                    ChunkSum((4, 4, 8), method='chunksum_inplace_v2')))
+        return sim, drifter
+
+    with torch.no_grad():
+        truth = build(truth_lifetime)[0](response, time, charge, tail, head).data.clone()
+
+    sim, drifter = build(start)
+    opt = torch.optim.Adam([drifter.lifetime], lr=lr)
+    for _ in range(steps):
+        opt.zero_grad()
+        out = sim(response, time, charge, tail, head)
+        nn.MSELoss()(out.data, truth).backward()
+        opt.step()
+    return float(drifter.lifetime.detach())
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize('start', [12.4, 8.7])
+def test_lifetime_fit_converges_from_both_sides(start):
+    '''
+    The study fits from above and below nominal. Both arms must reach the
+    same minimum -- that is what makes the differentiable chain useful rather
+    than merely non-erroring.
+    '''
+    fitted = _fit_lifetime(start)
+    assert abs(fitted - 10.0) < abs(start - 10.0) * 0.5, \
+        f'started at {start}, reached {fitted}, wanted nearer 10.0'
+
+
+@pytest.mark.slow
+def test_pruning_breaks_the_fit_by_changing_the_output_shape():
+    '''
+    Why graph_opt passes prune=False everywhere.
+
+    Pruning is a data-dependent mask, so moving the fitted parameter can change
+    how many chunks survive and the loss against a fixed truth then fails on
+    shape. Measured block counts for lifetime 2/10/50 with pruning on:
+    140/142/144. This is the real reason the end_to_end branch deleted the
+    pruning -- not gradients, which flow through it fine.
+    '''
+    with pytest.raises(RuntimeError):
+        _fit_lifetime(40.0, truth_lifetime=3.0, steps=3, lr=5.0, prune=True)

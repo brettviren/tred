@@ -393,11 +393,22 @@ class ChunkSum(nn.Module):
 
     '''
 
-    def __init__(self, chunk_shape=None, nbatches=1000, method='chunksum'):
+    def __init__(self, chunk_shape=None, nbatches=1000, method='chunksum',
+                 prune=True):
+        '''
+        - prune :: drop chunks whose content is everywhere negligible.  On by
+                   default.  Set False when the OUTPUT SHAPE must not depend on
+                   the data, which is the case when fitting: pruning is a
+                   data-dependent mask, so a parameter change can alter the
+                   block count and break a loss taken against a fixed
+                   reference.  Only affects the 'chunksum' and
+                   'chunksum_differential' methods.  See tred-4pz.17.
+        '''
         super().__init__()
         if chunk_shape is None:
             raise ValueError('a unitless, integer N-tensor chunk shape is required')
         constant(self, 'chunk_shape', chunk_shape, index_dtype)
+        self._prune = prune
         self._chunk_shape_tuple  = to_tuple(chunk_shape)
         # constant(self, 'max_mem_byte', 5*1024**3, torch.int64)
         self._nbatches = nbatches
@@ -433,7 +444,8 @@ class ChunkSum(nn.Module):
         fragile for a grad-requiring or non-contiguous envelope.  See
         sparse.fill_envelope_index_put() and tred-4pz.7.
         '''
-        return accumulate(chunkify_bins(block, self.chunk_shape))
+        return accumulate(chunkify_bins(block, self.chunk_shape),
+                          prune=self._prune)
 
     def _chunksum(self, block: Block) -> Block:
         '''
@@ -447,7 +459,8 @@ class ChunkSum(nn.Module):
         #     torch.cuda.empty_cache()
         #     return accumulate(chunkify(block, self.chunk_shape))
 
-        return accumulate(chunkify(block, self.chunk_shape))
+        return accumulate(chunkify(block, self.chunk_shape),
+                          prune=self._prune)
 
         nchunks = block.nbatches // self._nbatches + 1
 
