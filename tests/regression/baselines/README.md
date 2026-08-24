@@ -38,8 +38,36 @@ Baseline RSS after importing torch alone: ~244 MB, which the
 | long_track | 56x36x185 | 98.46 MB | 737.3 MB |
 | long_track_diffuse | 66x46x233 | 186.75 MB | 1335.6 MB |
 
-A **single** long, well-diffused step peaks at over 1.3 GB. That is the
-problem tred-02x exists to solve, and these are the numbers to beat.
+A **single** long, well-diffused step peaks at over 1.3 GB. That was the
+problem tred-02x existed to solve.
+
+### After the sliced path (tred-02x.7)
+
+`xyz_limit` bounds peak memory by the slab rather than the whole box. Measured
+the same way, peak RSS above the torch-import baseline:
+
+| case | unsliced | `xyz_limit=25` | reduction |
+| --- | ---: | ---: | ---: |
+| long_track_diffuse | 1352.9 MB | 197.2 MB | 85% |
+| long_track | 731.1 MB | 147.5 MB | 80% |
+| very_wide_diffusion | 260.0 MB | 89.5 MB | 66% |
+
+Charge totals are identical in every case. Wall time is flat or better --
+long_track went from 731 ms to 488 ms, presumably cache locality.
+
+Sweeping the limit on long_track_diffuse:
+
+| `xyz_limit` | peak RSS | time |
+| --- | ---: | ---: |
+| off | 1352 MB | 880 ms |
+| 100 | 624 MB | 824 ms |
+| 50 | 362 MB | 870 ms |
+| 25 | 196 MB | 916 ms |
+| 10 | 112 MB | 823 ms |
+
+Regenerate with `--xyz-limit N`:
+
+    python tests/regression/qeff_memory_profile.py --case long_track_diffuse --xyz-limit 25
 
 Measured peak runs 7.1-8.2x the analytic `field_bytes` across the large cases.
 The ratio is stable, so the analytic figure is a usable deterministic proxy

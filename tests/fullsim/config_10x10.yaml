@@ -1,0 +1,24 @@
+# End-to-end fullsim, from data/README.org.
+#
+# Paths are relative to the REPO ROOT; run from there:
+#
+#   tred -c tests/fullsim/config_10x10.yaml -l output_10x10.log fullsim \
+#     -i data/MicroProdN1p1_NDLAr_1E18_RHC.convert2h5.nu.0000001.EDEPSIM.hdf5 \
+#     -o test_output.npz
+#
+# The data/ directory is gitignored, so the response and input files are not in
+# the repo; see data/README.org for what they are.
+response_path: "data/fr_4p4pitch_3.8pix_nogrid_10pathsperpixel.npz"
+module_yaml: "tests/nd_geometry/ndlar-module.yaml"
+tile_yaml: "tests/nd_geometry/multi_tile_layout-3.0.40.yaml"
+lifetime: 2.2 # ms
+threshold: 5. # ke
+event_list: [1003,]
+uncorr_noise: null #ke
+reset_noise: null #ke
+thres_noise: null #ke
+save_waveform: false
+fluctuate: false
+# NOTE: silently ignored at present, LacedConvo's shape is hardcoded to
+# (8, 8, 2048). See the beads issue on convo_o_shape.
+convo_o_shape: [4, 4, 2048]

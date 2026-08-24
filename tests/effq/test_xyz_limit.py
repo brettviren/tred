@@ -159,3 +159,43 @@ def test_raster_forwards_the_limit_without_changing_results():
         assert torch.allclose(ref.data, got.data, rtol=0.0, atol=SLICE_ATOL)
         assert float(got.data.sum()) == pytest.approx(float(ref.data.sum()),
                                                       rel=1e-14)
+
+
+# --------------------------------------------------------------------------
+# composition with the differentiable path
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize('limit', [2, 4, 8])
+def test_gradients_survive_slicing(limit):
+    '''
+    torch.cat of per-slab results is autograd-safe, but confirm rather than
+    assume: the sliced path must give the same gradient as the unsliced one.
+    '''
+    def grad_wrt_sigma(xyz_limit):
+        sigma = torch.tensor([[0.5, 0.5, 0.3]], dtype=F64, requires_grad=True)
+        qeff, _ = compute_qeff(
+            Q=torch.tensor([1000.], dtype=F64),
+            X0=torch.tensor([[1., 1., 1.]], dtype=F64),
+            X1=torch.tensor([[3., 2., 1.5]], dtype=F64),
+            Sigma=sigma, n_sigma=(3., 3., 3.), origin=(0, 0, 0),
+            grid_spacing=GRID, method='gauss_legendre', npoints=(2, 2, 2),
+            xyz_limit=xyz_limit, min_sigma=None)
+        qeff.square().sum().backward()
+        return sigma.grad.clone()
+
+    reference = grad_wrt_sigma(None)
+    got = grad_wrt_sigma(limit)
+    assert torch.isfinite(got).all()
+    assert torch.allclose(got, reference, rtol=1e-12, atol=0.0), \
+        f'{got.tolist()} != {reference.tolist()}'
+
+
+def test_slicing_composes_with_the_sigma_floor():
+    '''min_sigma is applied before the box is sized, so the two are ordered.'''
+    args = ([[1., 1., 1.]], [[1.05, 1., 6.]], [[0.02, 0.02, 0.02]], [1000.])
+    ref, _ = _qeff(*args)
+    got, _ = _qeff(*args, xyz_limit=4)
+    assert ref.shape == got.shape
+    assert torch.allclose(ref, got, rtol=0.0, atol=SLICE_ATOL)
+    # the floor still did its job through the sliced path
+    assert float(got.sum()) == pytest.approx(1000.0, rel=0.05)

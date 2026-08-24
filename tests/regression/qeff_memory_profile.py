@@ -124,7 +124,7 @@ def analytic(name):
     }
 
 
-def run_one(name, repeats=3):
+def run_one(name, repeats=3, xyz_limit=None):
     '''Rasterize one geometry in this process and time it.'''
     X0, X1, Sigma, Q, ns, npts = _tensors(name)
     gs = torch.tensor(GRID, dtype=F64)
@@ -135,7 +135,7 @@ def run_one(name, repeats=3):
         qeff, offset = compute_qeff(Q=Q, X0=X0, X1=X1, Sigma=Sigma,
                                     n_sigma=(ns, ns, ns), origin=(0, 0, 0),
                                     grid_spacing=gs, method='gauss_legendre',
-                                    npoints=npts)
+                                    npoints=npts, xyz_limit=xyz_limit)
         best = min(best, time.perf_counter() - t0)
     return qeff, offset, best
 
@@ -194,10 +194,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--json', action='store_true')
     ap.add_argument('--case', help='run one geometry and print its peak RSS')
+    ap.add_argument('--xyz-limit', type=int, default=None,
+                    help='slab limit for the sliced path (tred-02x.7)')
     args = ap.parse_args()
 
     if args.case:
-        qeff, _offset, secs = run_one(args.case, repeats=1)
+        qeff, _offset, secs = run_one(args.case, repeats=1,
+                                      xyz_limit=args.xyz_limit)
         print('CHILD_JSON=' + json.dumps({
             'rss_bytes': resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
             'seconds': secs,
