@@ -757,16 +757,35 @@ def eval_qeff(Q, X0, X1, Sigma, offset, shape, origin, grid_spacing,
     # FIXME: may update batch dimension in the future
     too_short_mask = too_short(X0, X1, Sigma, threshold=threshold)
 
-    charge = torch.zeros((Q.size(0), *lmn, *shape),
-                         dtype=dtype, device=device)
-    mask_shape = [-1,] + [1,] * (len(lmn) + len(shape))
-    expand_shape = [Q.size(0), *lmn] + [s.item() for s in shape]
-    too_short_mask = too_short_mask.view(mask_shape).expand(*expand_shape)
-    charge = torch.where(too_short_mask,
-                         eval_qmodel(Q, X0, X1, Sigma, x, y, z,
-                                     qmodel=qpoint_model, **kwargs),
-                         eval_qmodel(Q, X0, X1, Sigma, x, y, z,
-                                     qmodel=qline_model, **kwargs))
+    # Evaluate each charge model only on the steps that need it.
+    #
+    # This was previously a torch.where() over both models.  Both arms of
+    # torch.where() are evaluated eagerly, so that computed the point model AND
+    # the line model over the ENTIRE (nbatch, *lmn, *shape) grid for every step
+    # and then threw one of them away per step -- roughly twice the peak memory
+    # and twice the model-evaluation work needed.  It also allocated a
+    # full-size zeros tensor that the torch.where() immediately replaced.
+    #
+    # Splitting by batch index costs one full-size buffer plus two partial
+    # evaluations whose batch dimensions sum to the full batch.  index_put() is
+    # used rather than in-place assignment so the result stays differentiable.
+    # See tred-02x.4.
+    point_idx = too_short_mask.nonzero(as_tuple=True)[0]
+    line_idx = (~too_short_mask).nonzero(as_tuple=True)[0]
+
+    def _subset(idx, qmodel):
+        return eval_qmodel(Q[idx], X0[idx], X1[idx], Sigma[idx],
+                           x[idx], y[idx], z[idx], qmodel=qmodel, **kwargs)
+
+    if line_idx.numel() == 0:
+        charge = _subset(point_idx, qpoint_model)
+    elif point_idx.numel() == 0:
+        charge = _subset(line_idx, qline_model)
+    else:
+        charge = torch.zeros((Q.size(0), *lmn, *shape),
+                             dtype=dtype, device=device)
+        charge = charge.index_put((point_idx,), _subset(point_idx, qpoint_model))
+        charge = charge.index_put((line_idx,), _subset(line_idx, qline_model))
 
     charge = charge.view(Q.size(0), lmn_prod,  # batch, chanenel
                          shape[0], shape[1], shape[2])  # D1, D2, D3
