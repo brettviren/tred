@@ -1,0 +1,36 @@
+{
+  "cases": [
+    "absorb_fluctuate",
+    "absorb_negative_dt",
+    "absorb_no_fluctuate",
+    "absorb_non_integer_charge",
+    "accumulate_all_zero",
+    "accumulate_below_prune_threshold",
+    "accumulate_mixed_zero",
+    "accumulate_overlapping",
+    "chunksum_methods",
+    "diffuse_negative_dt",
+    "diffuse_negative_dt_with_sigma",
+    "diffuse_scalar_diffusion",
+    "diffuse_vector_diffusion",
+    "diffuse_with_initial_sigma",
+    "drifter_forward",
+    "drifter_forward_fluctuate",
+    "qeff_anisotropic",
+    "qeff_line",
+    "qeff_mixed_batch",
+    "qeff_narrow_sigma_charge_loss",
+    "qeff_point_like",
+    "qeff_quadrature_orders",
+    "qeff_wide_diffusion",
+    "raster_forward",
+    "sim_end_to_end"
+  ],
+  "grid_spacing": [
+    0.4,
+    0.4,
+    0.05
+  ],
+  "seed": 20260824,
+  "torch": "2.13.0+cpu"
+}
