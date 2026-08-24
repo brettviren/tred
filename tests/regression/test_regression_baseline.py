@@ -132,14 +132,26 @@ def test_chunksum_methods_conserve_total():
             f'{name}={total} disagrees with chunksum={reference}'
 
 
-def test_wide_diffusion_conserves_charge():
+def test_charge_is_conserved_at_every_width():
     '''
-    Charge conservation holds when sigma is comparable to the grid pitch.
+    Charge conservation now holds across the whole sigma range.
 
-    The narrow-sigma regime does NOT conserve charge (tred-xsj); that failure
-    is pinned as a fixture rather than asserted here, so this test stays green
-    and meaningful while that bug is open.
+    It used to hold only when sigma was comparable to the grid pitch; below
+    about half a cell the quadrature silently lost charge, down to returning
+    exactly zero and then NaN (tred-xsj).  The resolvable-sigma floor fixed
+    that, so this asserts the general property rather than a carve-out.
     '''
-    result = bc.run_case('qeff_wide_diffusion')
-    assert abs(result['sum'].item() - 1000.0) / 1000.0 < 0.01, \
-        'charge conservation broke in the well-resolved regime'
+    for name, true_q in (('qeff_wide_diffusion', 1000.0),
+                         ('qeff_point_like', 1000.0),
+                         ('qeff_anisotropic', 1000.0),
+                         ('qeff_narrow_sigma_charge_loss', 1000.0),
+                         ('qeff_mixed_batch', 1500.0)):
+        got = bc.run_case(name)['sum'].item()
+        assert abs(got - true_q) / true_q < 0.03, \
+            f'{name}: rasterized {got} of {true_q}'
+
+
+def test_narrow_sigma_still_fails_without_the_floor():
+    '''The floor must be doing the work, not coincidence.'''
+    raw = bc.run_case('qeff_narrow_sigma_charge_loss')['unfloored_sum'].item()
+    assert abs(raw - 1000.0) / 1000.0 > 0.10

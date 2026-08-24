@@ -870,6 +870,86 @@ def eval_qeff(Q, X0, X1, Sigma, offset, shape, origin, grid_spacing,
     return charge, offset
 
 
+# Fraction of a grid cell below which a Gaussian cannot be resolved by the
+# default 2-point Gauss-Legendre rule.  See apply_min_sigma().
+MIN_SIGMA_CELL_FRACTION = 0.5
+
+_warned_min_sigma = False
+
+
+def apply_min_sigma(Sigma, grid_spacing, min_sigma='auto',
+                    dtype=DEFAULT_FLOAT_DTYPE):
+    '''
+    Raise Sigma to a per-axis floor so the charge model stays resolvable.
+
+    eval_qeff() integrates the charge model with an npoints-per-cell
+    Gauss-Legendre rule.  When sigma is small compared to the cell the nodes
+    can miss the peak, and the rasterized total is wrong -- silently, and in
+    either direction.  Measured for the default npoints=(2,2,2), sweeping a
+    point deposit across a cell and taking the worst case:
+
+        sigma/spacing   worst error
+             1.00          0.8%     <- this is the +/-3 sigma box truncation
+             0.75          0.6%
+             0.50          0.8%
+             0.40          3.9%
+             0.30         13.7%
+             0.25         26.1%
+
+    So half a cell is where the quadrature error disappears into the box
+    truncation error already present.  Below about an eighth of a cell the
+    result collapses to zero, and at sigma=0 it is NaN.
+
+    Arguments:
+        min_sigma: 'auto' for MIN_SIGMA_CELL_FRACTION * grid_spacing per axis,
+                   which is the default; a scalar or per-axis sequence to set
+                   the floor explicitly; or None/0 to disable it and accept
+                   the unresolved-quadrature error.
+
+    Raising the order instead would work -- n=6 holds down to about an eighth
+    of a cell -- but the quadrature block scales as prod(npoints), so n=6 costs
+    27x the memory and compute of n=2 in 3D, and it is needed precisely for the
+    narrow depos that are cheapest to get right by widening.
+
+    A floor is an approximation: it broadens charge that is genuinely narrower
+    than the grid can represent.  That is preferable to losing it. In
+    production the grid is the pitch divided by the impact-position count, and
+    post-drift sigma is normally several cells, so this should rarely engage.
+
+    See tred-xsj.
+    '''
+    global _warned_min_sigma
+
+    if min_sigma is None:
+        return Sigma
+
+    if isinstance(min_sigma, str):
+        if min_sigma != 'auto':
+            raise ValueError(f"min_sigma must be 'auto', a number, a sequence "
+                             f"or None, got {min_sigma!r}")
+        floor = to_tensor(grid_spacing, device=Sigma.device, dtype=dtype)
+        floor = floor.abs() * MIN_SIGMA_CELL_FRACTION
+    else:
+        floor = to_tensor(min_sigma, device=Sigma.device, dtype=dtype)
+
+    if floor.ndim == 0:
+        floor = floor.expand(Sigma.shape[-1])
+    if not bool(torch.any(floor > 0)):
+        return Sigma
+
+    floored = torch.maximum(Sigma, floor.unsqueeze(0))
+
+    if not _warned_min_sigma and bool(torch.any(floored > Sigma)):
+        _warned_min_sigma = True
+        logger.warning(
+            'raster: sigma raised to the resolvable floor on at least one '
+            'axis (floor %s). Below about half a grid cell the quadrature '
+            'silently loses charge; pass min_sigma=None to disable this. '
+            'Warned once per process.', floor.tolist())
+
+    return floored
+
+
 def compute_qeff(Q, X0, X1, Sigma, n_sigma, origin, grid_spacing, method, npoints, **kwargs):
     '''
     Compute a charge box from the step geometry and then rasterize the
@@ -920,6 +1000,8 @@ def compute_qeff(Q, X0, X1, Sigma, n_sigma, origin, grid_spacing, method, npoint
     X0 = X0.to(dtype=dtype)
     X1 = X1.to(dtype=dtype)
     Sigma = Sigma.to(dtype=dtype)
+    Sigma = apply_min_sigma(Sigma, grid_spacing,
+                            kwargs.pop('min_sigma', 'auto'), dtype=dtype)
     offset, shape = compute_charge_box(X0, X1, Sigma, n_sigma, origin, grid_spacing,
                                        dtype=dtype, **kwargs)
     qeff, offset = eval_qeff(Q, X0, X1, Sigma, offset, shape, origin, grid_spacing,

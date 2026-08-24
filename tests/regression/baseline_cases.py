@@ -218,14 +218,42 @@ def qeff_mixed_batch():
 
 def qeff_narrow_sigma_charge_loss():
     '''
-    Pins the charge-conservation failure of tred-xsj as observed behaviour.
+    Narrow sigma, recorded both with and without the resolvable-sigma floor.
 
-    sigma well below the grid pitch: the quadrature under-integrates badly and
-    the rasterized total collapses.  Recorded so that a fix to tred-xsj shows
-    up here as an intended change rather than going unnoticed, and so the
-    tred-02x port is not blamed for it.
+    Without the floor this is tred-xsj in its rawest form: sigma at an eighth
+    of a cell, and the quadrature returns 24.8 of 1000.  With the floor (the
+    default) it returns 980.
+
+    Both are recorded so the floor cannot be silently removed or its threshold
+    changed without this moving.
     '''
-    return _qeff([[1.0, 1.0, 1.0]], [[1.001, 1.0, 1.0]], [[0.05, 0.05, 0.05]], [1000.0])
+    floored = _qeff([[1.0, 1.0, 1.0]], [[1.001, 1.0, 1.0]], [[0.05, 0.05, 0.05]],
+                    [1000.0])
+    X0 = torch.tensor([[1.0, 1.0, 1.0]], dtype=F64)
+    X1 = torch.tensor([[1.001, 1.0, 1.0]], dtype=F64)
+    Sigma = torch.tensor([[0.05, 0.05, 0.05]], dtype=F64)
+    raw, _ = compute_qeff(
+        Q=torch.tensor([1000.0], dtype=F64), X0=X0, X1=X1, Sigma=Sigma,
+        n_sigma=(3.0, 3.0, 3.0), origin=(0, 0, 0),
+        grid_spacing=torch.tensor(GRID, dtype=F64),
+        method='gauss_legendre', npoints=(2, 2, 2), min_sigma=None)
+    return {k: v for k, v in floored.items()} | {'unfloored_sum': raw.sum()}
+
+
+def qeff_min_sigma_floor():
+    '''
+    The floor engages below half a cell and is inert above it.
+
+    Sweeps sigma across the threshold and records the rasterized total, so a
+    change to MIN_SIGMA_CELL_FRACTION shows up here.
+    '''
+    out = {}
+    for tag, sig in (('r100', 0.40), ('r075', 0.30), ('r050', 0.20),
+                     ('r025', 0.10), ('r012', 0.05), ('zero', 0.0)):
+        res = _qeff([[1.2, 1.2, 1.0]], [[1.2001, 1.2, 1.0]],
+                    [[sig, sig, 0.05]], [1000.0])
+        out[f'sum_{tag}'] = res['sum']
+    return out
 
 
 def qeff_recenter_batch():

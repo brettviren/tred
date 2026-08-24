@@ -50,7 +50,8 @@ def raster_steps(*args,**kwds):
                         n_sigma=(kwds['nsigma'], kwds['nsigma'], kwds['nsigma']),
                         origin=(0,0,0), method='gauss_legendre',
                         npoints=kwds.get('npoints', (2, 2, 2)),
-                        dtype=kwds.get('dtype', torch.float64))
+                        dtype=kwds.get('dtype', torch.float64),
+                        min_sigma=kwds.get('min_sigma', 'auto'))
 
 def param(thing, dtype=torch.float32):
     if isinstance(thing, torch.Tensor):
@@ -226,7 +227,8 @@ class Raster(nn.Module):
     Raster depos or steps.
     '''
     def __init__(self, velocity, grid_spacing, pdims=(1,2), tdim=-1,
-                 nsigma=3.0, npoints=(2,2,2), dtype=torch.float64):
+                 nsigma=3.0, npoints=(2,2,2), dtype=torch.float64,
+                 min_sigma='auto'):
         '''
         - velocity :: signed velocity for computing time difference between tail and head
         - pdims :: the N-1 dimensions for transverse pitch indexing into input points.
@@ -235,6 +237,12 @@ class Raster(nn.Module):
                   This is the target axis of the new tensor to be processed.
         - grid_spacing :: 1D tensor or tuple/list. Spacing of grid is in the transformed coordinate.
         - dtype :: floating-point compute dtype used by rasterization, default float64.
+        - min_sigma :: per-axis floor applied to the diffusion width before
+                       rasterizing.  'auto' (default) uses half a grid cell,
+                       below which the quadrature silently loses charge; a
+                       number or per-axis sequence sets it explicitly; None
+                       disables it.  See raster.steps.apply_min_sigma and
+                       tred-xsj.
         '''
         super().__init__()
 
@@ -250,6 +258,7 @@ class Raster(nn.Module):
         constant(self, 'nsigma', nsigma, dtype)
         self._npoints = npoints
         self._dtype = dtype
+        self._min_sigma = min_sigma
 
         self._pdims = pdims or ()
         self._tdim = tdim if tdim>=0 else len(self._pdims) + 1 + tdim
@@ -339,7 +348,8 @@ class Raster(nn.Module):
         head = self._transform(head, dt+time)
         rasters, offsets = raster_steps(self.grid_spacing, tail, head, sigma, charge,
                                         nsigma=self.nsigma, npoints=self._npoints,
-                                        dtype=self._dtype)
+                                        dtype=self._dtype,
+                                        min_sigma=self._min_sigma)
 
         return Block(location = offsets, data=rasters)
 

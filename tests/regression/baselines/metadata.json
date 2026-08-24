@@ -18,6 +18,7 @@
     "drifter_forward_fluctuate",
     "qeff_anisotropic",
     "qeff_line",
+    "qeff_min_sigma_floor",
     "qeff_mixed_batch",
     "qeff_narrow_sigma_charge_loss",
     "qeff_point_like",
