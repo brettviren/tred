@@ -1,0 +1,19 @@
+# Memory scan for the sliced raster path (tred-02x).  Paths are relative to the
+# REPO ROOT; see tests/fullsim/config_10x10.yaml for how to run.
+#
+# Ported from tests/playground/zero_out_wf/config_effqmem_xlimit*.yaml on the
+# mem_xyzlimit branch, which used absolute paths into the author's home
+# directory and the branch's own key name (mem_xyzlimit).
+response_path: "data/response_44_v2a_full.npz"
+module_yaml: "tests/nd_geometry/ndlar-module.yaml"
+tile_yaml: "tests/nd_geometry/multi_tile_layout-3.0.40.yaml"
+drtoa: 30.431 # cm
+lifetime: 2.2 # ms
+threshold: 5. # ke
+event_list: [1025, 1026, 1027]
+uncorr_noise: null #ke
+reset_noise: null #ke
+thres_noise: null #ke
+save_waveform: true
+fluctuate: false
+xyz_limit: 25

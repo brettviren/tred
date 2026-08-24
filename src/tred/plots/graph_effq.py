@@ -67,6 +67,10 @@ old_geo_config = True
 # 'cuda', which made fullsim unusable on a CPU-only machine.
 device_name = 'auto'
 
+# Slab limit for rasterization; None never slices.  See raster.steps and
+# tred-02x.7.
+xyz_limit = None
+
 
 def resolve_device(name=None):
     '''Turn the configured device name into one torch can actually use.'''
@@ -295,7 +299,8 @@ def runit(device='cpu'):
                           target=tpcdataset.anode, drtoa=drtoa)
         drifter = drifter.to(device=device)
 
-        raster = Raster(tpcdataset.drift*velocity, grid_spacing, npoints=npoints).to(device=device)
+        raster = Raster(tpcdataset.drift*velocity, grid_spacing, npoints=npoints,
+                        xyz_limit=xyz_limit).to(device=device)
         # raster = raster.to(device=device)
         chunksum = chunksum.to(device=device)
         convo = convo.to(device=device)
@@ -702,6 +707,8 @@ def fullsim(config, finpath, foutpath):
     backmark_each_stage = config.get("benchmark_each_stage", True)
     batch_scheme = config.get("batch_scheme", [100, 50])
     npoints = config.get('npoints', (2, 2, 2))
+    global xyz_limit
+    xyz_limit = config.get('xyz_limit', None)
 
     # loading response
     if os.path.splitext(response_path)[1] == '.npz':
