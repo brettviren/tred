@@ -39,9 +39,21 @@ def diffuse(dt, diffusion, sigma=None):
 
     A sigma of None indicate no prior diffusion.
 
-    Note, negative dt entries will result in a shrinking of any initial sigma.
-    Where this shrinkage may go negative the resulting sigma element is set to
-    zero.
+    Note, negative dt means the drift "backed up", which is unphysical.  Such
+    entries are treated as dt=0: no diffusion is added and any initial sigma is
+    returned unchanged.  This matches absorb(), which likewise leaves charge
+    untouched for negative dt.
+
+    This previously worked the other way around: negative dt shrank the initial
+    sigma, and once 2*diffusion*dt + sigma^2 went negative the sqrt produced NaN
+    which was then masked to zero.  That was discontinuous (a smooth shrink up
+    to the point the argument turned negative, then a hard jump to zero) and it
+    destroyed an already-accumulated physical width.  A zero sigma is also
+    actively dangerous downstream: compute_qeff() returns all-zero charge for a
+    very narrow sigma and NaN for exactly zero (see tred-xsj).
+
+    Clamping the cause rather than masking the symptom also keeps the operation
+    differentiable, which the in-place NaN assignment was not.
     '''
     squeeze = False
 
@@ -68,13 +80,17 @@ def diffuse(dt, diffusion, sigma=None):
     diffusion = diffusion[None,:] # add npts dimension
     dt = dt[:,None]               # add vdim dimension
 
+    # Treat a backed-up drift as no drift.  torch.where keeps this
+    # differentiable (zero gradient through the clamped entries) where the
+    # in-place NaN mask it replaces was not.
+    dt = torch.where(dt < 0, torch.zeros_like(dt), dt)
+
     if sigma is None:
         sigma = torch.sqrt(2*diffusion*dt)
     else:
         if len(sigma.shape) == 1:
             sigma = sigma[:,None] # add vdim
         sigma = torch.sqrt(2*diffusion*dt + sigma*sigma)
-    sigma[torch.isnan(sigma)] = 0
     if squeeze:
         sigma = torch.squeeze(sigma)
     return sigma

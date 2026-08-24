@@ -408,11 +408,16 @@ def write_baselines(prefix=''):
         path = os.path.join(BASELINE_DIR, f'{name}.pt')
         torch.save({k: torch.as_tensor(v) for k, v in result.items()}, path)
         written.append(name)
+    # A prefixed write only re-records some cases, so the recorded case list is
+    # everything that now has a fixture on disk -- not just what this call
+    # touched.  Deriving it from the directory keeps a partial re-record from
+    # silently truncating the list.
+    on_disk = sorted(f[:-3] for f in os.listdir(BASELINE_DIR) if f.endswith('.pt'))
     meta = {
         'torch': torch.__version__,
         'seed': SEED,
         'grid_spacing': GRID,
-        'cases': written,
+        'cases': on_disk,
     }
     with open(os.path.join(BASELINE_DIR, 'metadata.json'), 'w') as fp:
         json.dump(meta, fp, indent=2, sort_keys=True)
