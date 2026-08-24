@@ -62,6 +62,22 @@ response = None
 
 old_geo_config = True
 
+# 'auto' picks cuda when it is available and cpu otherwise.  Set explicitly to
+# 'cpu' or 'cuda' to force one.  Both runit() call sites used to hardcode
+# 'cuda', which made fullsim unusable on a CPU-only machine.
+device_name = 'auto'
+
+
+def resolve_device(name=None):
+    '''Turn the configured device name into one torch can actually use.'''
+    name = device_name if name is None else name
+    if name in (None, 'auto'):
+        return 'cuda' if torch.cuda.is_available() else 'cpu'
+    if name == 'cuda' and not torch.cuda.is_available():
+        warning('device "cuda" requested but torch has no CUDA; using cpu')
+        return 'cpu'
+    return name
+
 convo_o_shape = None
 benchmark_each_stage = True
 batch_scheme = [100, 50]
@@ -618,7 +634,7 @@ def plots(out):
         # torch.set_default_device('cuda')
         # runit('cpu')
         # info('FINISHED CPU')
-        runit('cuda')
+        runit(resolve_device())
         info('FINISHED CUDA')
 
 def fullsim(config, finpath, foutpath):
@@ -680,6 +696,8 @@ def fullsim(config, finpath, foutpath):
     const_recomb = config.get("const_recomb", False)
     effq_out_nt = config.get("effq_out_nt", 1)
     old_geo_config = config.get("old_geo_config", True)
+    global device_name
+    device_name = config.get("device", "auto")
     convo_o_shape = config.get("convo_o_shape", (4, 4, 2048))
     backmark_each_stage = config.get("benchmark_each_stage", True)
     batch_scheme = config.get("batch_scheme", [100, 50])
@@ -719,4 +737,4 @@ def fullsim(config, finpath, foutpath):
         output_path = foutpath
 
     with torch.no_grad():
-        runit('cuda')
+        runit(resolve_device())

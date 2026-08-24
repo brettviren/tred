@@ -745,6 +745,45 @@ def eval_qmodel(Q, X0, X1, Sigma, x, y, z, qmodel=qline_diff3D, **kwargs):
     return charge
 
 
+def _xyz_limit_vector(shape, xyz_limit):
+    '''Normalise xyz_limit to a per-axis python list, or None when off.'''
+    if xyz_limit is None:
+        return None
+    if isinstance(xyz_limit, torch.Tensor):
+        vals = [int(v) for v in xyz_limit.flatten().tolist()]
+    elif isinstance(xyz_limit, (int,)) and not isinstance(xyz_limit, bool):
+        vals = [int(xyz_limit)] * len(shape)
+    else:
+        vals = [int(v) for v in xyz_limit]
+    if len(vals) == 1:
+        vals = vals * len(shape)
+    if len(vals) != len(shape):
+        raise ValueError(f'xyz_limit must be a scalar or have one entry per '
+                         f'axis, got {xyz_limit!r} for shape {list(shape)}')
+    if any(v <= 0 for v in vals):
+        raise ValueError(f'xyz_limit entries must be positive, got {vals}')
+    return vals
+
+
+def _slice_axis(shape, xyz_limit):
+    '''
+    Which axis to slice, or None to evaluate the box in one piece.
+
+    Slices the LARGEST over-limit axis, which is where the memory is.  The
+    mem_xyzlimit branch dropped that rule and, with an if/elif cascade
+    consuming the per-axis flags, always sliced x when x was over -- even when
+    y or z was far larger, i.e. the opposite of what helps.  See tred-02x.9.
+    '''
+    limits = _xyz_limit_vector(shape, xyz_limit)
+    if limits is None:
+        return None
+    box = [int(v) for v in shape]
+    over = [i for i, (n, lim) in enumerate(zip(box, limits)) if n > lim]
+    if not over:
+        return None
+    return max(over, key=lambda i: box[i])
+
+
 def eval_qeff(Q, X0, X1, Sigma, offset, shape, origin, grid_spacing,
               method, npoints, dtype=DEFAULT_FLOAT_DTYPE, **kwargs):
     '''
@@ -813,6 +852,7 @@ def eval_qeff(Q, X0, X1, Sigma, offset, shape, origin, grid_spacing,
     qline_model = kwargs.get('qline_model', qline_diff3D)
     qpoint_model = kwargs.get('qpoint_model', qpoint_diff3D)
     threshold = kwargs.get('threshold', 0.1)
+    xyz_limit = kwargs.pop('xyz_limit', None)
 
     # FIXME: dimensions are hard coded
     kernel = create_wu_block(method, npoints, grid_spacing, device, dtype=dtype)
@@ -835,45 +875,98 @@ def eval_qeff(Q, X0, X1, Sigma, offset, shape, origin, grid_spacing,
     # This was previously a torch.where() over both models.  Both arms of
     # torch.where() are evaluated eagerly, so that computed the point model AND
     # the line model over the ENTIRE (nbatch, *lmn, *shape) grid for every step
-    # and then threw one of them away per step -- roughly twice the peak memory
-    # and twice the model-evaluation work needed.  It also allocated a
-    # full-size zeros tensor that the torch.where() immediately replaced.
-    #
-    # Splitting by batch index costs one full-size buffer plus two partial
-    # evaluations whose batch dimensions sum to the full batch.  index_put() is
-    # used rather than in-place assignment so the result stays differentiable.
-    # See tred-02x.4.
+    # and then threw one of them away per step.  It also allocated a full-size
+    # zeros tensor that the torch.where() immediately replaced.  See
+    # tred-02x.4.
     point_idx = too_short_mask.nonzero(as_tuple=True)[0]
     line_idx = (~too_short_mask).nonzero(as_tuple=True)[0]
 
-    def _subset(idx, qmodel):
-        return eval_qmodel(Q[idx], X0[idx], X1[idx], Sigma[idx],
-                           x[idx], y[idx], z[idx], qmodel=qmodel, **kwargs)
+    def evaluate(xs, ys, zs):
+        '''Charge field over the given nodes, each model on its own steps.'''
+        def subset(idx, qmodel):
+            return eval_qmodel(Q[idx], X0[idx], X1[idx], Sigma[idx],
+                               xs[idx], ys[idx], zs[idx], qmodel=qmodel,
+                               **kwargs)
+        if line_idx.numel() == 0:
+            return subset(point_idx, qpoint_model)
+        if point_idx.numel() == 0:
+            return subset(line_idx, qline_model)
+        field = torch.zeros((Q.size(0), *lmn, xs.shape[-1], ys.shape[-1],
+                             zs.shape[-1]), dtype=dtype, device=device)
+        field = field.index_put((point_idx,), subset(point_idx, qpoint_model))
+        field = field.index_put((line_idx,), subset(line_idx, qline_model))
+        return field
 
-    if line_idx.numel() == 0:
-        charge = _subset(point_idx, qpoint_model)
-    elif point_idx.numel() == 0:
-        charge = _subset(line_idx, qline_model)
-    else:
-        charge = torch.zeros((Q.size(0), *lmn, *shape),
-                             dtype=dtype, device=device)
-        charge = charge.index_put((point_idx,), _subset(point_idx, qpoint_model))
-        charge = charge.index_put((line_idx,), _subset(line_idx, qline_model))
+    # padding='same' for a stencil of rst; see the note in the unsliced branch
+    pad = [(r - 1) // 2 for r in rst]
 
-    charge = charge.view(Q.size(0), lmn_prod,  # batch, chanenel
-                         shape[0], shape[1], shape[2])  # D1, D2, D3
-    # padding='same' is symmetric only for an odd kernel.  The kernel's spatial
-    # extent here is the interpolation stencil (kernel.size()[3:], i.e. rst),
-    # NOT the quadrature order npoints (which is kernel.size()[:3], lmn).  The
-    # stencil is 3 for every supported configuration: _create_u1d_GL() returns
-    # a (npt, 3) tensor whatever npt is, and _create_u_block() raises if handed
-    # anything else.  So the odd-kernel requirement holds by construction.
-    # Asserted in tests/effq/test_padding_stencil.py; if the stencil ever
-    # becomes even, that padding must change to an explicit asymmetric pad.
-    charge = torch.nn.functional.conv3d(charge, kernel, padding='same',
-                                        groups=lmn_prod)
-    charge = charge.sum(dim=1)
-    return charge, offset
+    def convolve(field, box_shape, conv_pad):
+        '''Reduce a charge field to per-cell charge.'''
+        field = field.view(Q.size(0), lmn_prod, *box_shape)
+        field = torch.nn.functional.conv3d(field, kernel, padding=conv_pad,
+                                           groups=lmn_prod)
+        return field.sum(dim=1)
+
+    axis = _slice_axis(shape, xyz_limit)
+    if axis is None:
+        # padding='same' is symmetric only for an odd kernel.  The kernel's
+        # spatial extent here is the interpolation stencil (kernel.size()[3:],
+        # i.e. rst), NOT the quadrature order npoints (kernel.size()[:3], lmn).
+        # The stencil is 3 for every supported configuration: _create_u1d_GL()
+        # returns a (npt, 3) tensor whatever npt is, and _create_u_block()
+        # raises if handed anything else.  So the odd-kernel requirement holds
+        # by construction.  Asserted in tests/effq/test_padding_stencil.py; if
+        # the stencil ever becomes even, this must become an explicit
+        # asymmetric pad.
+        return convolve(evaluate(x, y, z), [int(v) for v in shape],
+                        tuple(pad)), offset
+
+    # --- sliced path -------------------------------------------------------
+    #
+    # Evaluate, convolve and place one slab at a time along `axis`, so peak
+    # memory is set by the slab rather than the whole box.  The charge field
+    # and every temporary inside the charge models scale with the slab.
+    #
+    # Each slab is grown by a halo of pad[axis] cells on each side so the
+    # convolution sees its true neighbours, then convolved with zero padding on
+    # that axis and the usual 'same' padding on the other two.  Where the halo
+    # runs off the end of the box it is replaced by explicit zero padding,
+    # which is what 'same' would have supplied.  The result is therefore
+    # identical to the unsliced path, not an approximation.
+    #
+    # The extents come from the box and the halo, never from an assumed stencil
+    # width -- the mem_xyzlimit branch hardcoded a width of 2, correct against
+    # its own base and wrong against master's 3-wide stencil (tred-02x.3).
+    nodes = [x, y, z]
+    box = [int(v) for v in shape]
+    limit = int(_xyz_limit_vector(shape, xyz_limit)[axis])
+    halo = pad[axis]
+    conv_pad = list(pad)
+    conv_pad[axis] = 0
+
+    slabs = []
+    for begin in range(0, box[axis], limit):
+        stop = min(begin + limit, box[axis])
+        lo, hi = max(0, begin - halo), min(box[axis], stop + halo)
+
+        sliced = list(nodes)
+        sliced[axis] = nodes[axis][..., lo:hi]
+        slab_shape = list(box)
+        slab_shape[axis] = hi - lo
+
+        field = evaluate(*sliced).view(Q.size(0), lmn_prod, *slab_shape)
+
+        # restore the halo the box boundary could not supply
+        low_missing, high_missing = halo - (begin - lo), halo - (hi - stop)
+        if low_missing or high_missing:
+            fpad = [0, 0] * 3
+            fpad[2 * (2 - axis)] = low_missing
+            fpad[2 * (2 - axis) + 1] = high_missing
+            field = torch.nn.functional.pad(field, fpad)
+
+        slabs.append(convolve(field, list(field.shape[2:]), tuple(conv_pad)))
+
+    return torch.cat(slabs, dim=1 + axis), offset
 
 
 # Fraction of a grid cell below which a Gaussian cannot be resolved by the

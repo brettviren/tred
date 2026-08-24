@@ -51,7 +51,8 @@ def raster_steps(*args,**kwds):
                         origin=(0,0,0), method='gauss_legendre',
                         npoints=kwds.get('npoints', (2, 2, 2)),
                         dtype=kwds.get('dtype', torch.float64),
-                        min_sigma=kwds.get('min_sigma', 'auto'))
+                        min_sigma=kwds.get('min_sigma', 'auto'),
+                        xyz_limit=kwds.get('xyz_limit', None))
 
 def param(thing, dtype=torch.float32):
     '''
@@ -259,7 +260,7 @@ class Raster(nn.Module):
     '''
     def __init__(self, velocity, grid_spacing, pdims=(1,2), tdim=-1,
                  nsigma=3.0, npoints=(2,2,2), dtype=torch.float64,
-                 min_sigma='auto'):
+                 min_sigma='auto', xyz_limit=None):
         '''
         - velocity :: signed velocity for computing time difference between tail and head
         - pdims :: the N-1 dimensions for transverse pitch indexing into input points.
@@ -274,6 +275,13 @@ class Raster(nn.Module):
                        number or per-axis sequence sets it explicitly; None
                        disables it.  See raster.steps.apply_min_sigma and
                        tred-xsj.
+        - xyz_limit :: maximum charge-box extent in grid cells per axis before
+                       rasterization is done one slab at a time, bounding peak
+                       memory by the slab rather than the whole box.  None
+                       (default) never slices, so behaviour is unchanged.  A
+                       number applies to every axis; a per-axis sequence sets
+                       them separately.  Only the largest over-limit axis is
+                       sliced.  See raster.steps.eval_qeff and tred-02x.7.
         '''
         super().__init__()
 
@@ -290,6 +298,7 @@ class Raster(nn.Module):
         self._npoints = npoints
         self._dtype = dtype
         self._min_sigma = min_sigma
+        self._xyz_limit = xyz_limit
 
         self._pdims = pdims or ()
         self._tdim = tdim if tdim>=0 else len(self._pdims) + 1 + tdim
@@ -380,7 +389,8 @@ class Raster(nn.Module):
         rasters, offsets = raster_steps(self.grid_spacing, tail, head, sigma, charge,
                                         nsigma=self.nsigma, npoints=self._npoints,
                                         dtype=self._dtype,
-                                        min_sigma=self._min_sigma)
+                                        min_sigma=self._min_sigma,
+                                        xyz_limit=self._xyz_limit)
 
         return Block(location = offsets, data=rasters)
 
