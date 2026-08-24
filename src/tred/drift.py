@@ -109,6 +109,13 @@ def absorb(charge, dt, lifetime, fluctuate=False):
     This is unphysical. The surviving electrons (charge) remain the same when dt is negative.
     No negative binomial fluctuations or any factor from the exponential distribution is applied.
     '''
+    # The cast to integer counts is deliberate: charge is a number of
+    # electrons and Binomial() below needs an integral total_count.  It does
+    # detach charge, so d/d(charge) is unavailable -- but d/d(lifetime)
+    # survives, because lifetime enters through exp(-dt/lifetime), and lifetime
+    # is what gets fitted.  Removing the cast, as the end_to_end branch did,
+    # buys a gradient nothing currently wants and feeds a non-integral
+    # total_count to Binomial.  See tred-4pz.16 and tests/test_sim_gradient.py.
     charge = charge.to(dtype=torch.int32)
     if fluctuate:
         loss = 1.0 - torch.exp(-dt / lifetime)

@@ -54,6 +54,18 @@ def raster_steps(*args,**kwds):
                         min_sigma=kwds.get('min_sigma', 'auto'))
 
 def param(thing, dtype=torch.float32):
+    '''
+    Wrap a value as a non-trainable nn.Parameter.
+
+    requires_grad stays False deliberately.  The end_to_end branch flipped this
+    to True for its lifetime fit, which would make every value built through
+    param() trainable and have ordinary forward runs build and retain an
+    autograd graph they never use.  It is not needed: a caller that wants a
+    trainable quantity installs its own nn.Parameter, which is what
+    plots/graph_opt.py does with drifter.lifetime.  Measured in
+    tests/test_sim_gradient.py -- a lifetime gradient reaches the loss through
+    the whole Sim with this default unchanged.  See tred-4pz.13.
+    '''
     if isinstance(thing, torch.Tensor):
         return thing.to(dtype=dtype)
 
@@ -110,6 +122,10 @@ class Drifter(nn.Module):
 
         constant(self, 'target', target)
         constant(self, 'diffusion', diffusion)
+        # lifetime is a constant here on purpose.  To fit it, replace the
+        # attribute with your own nn.Parameter after construction -- see
+        # plots/graph_opt.py -- which keeps the gradient path intact without
+        # making every Drifter carry a trainable tensor.  tred-4pz.14.
         constant(self, 'lifetime', lifetime)
         constant(self, 'velocity', velocity)
         constant(self, 'vaxis', vaxis, index_dtype)

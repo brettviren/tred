@@ -137,9 +137,25 @@ def content(envelope, chunk_shape):
     return envelope.data.reshape(*rargs1).permute(*pargs).reshape(*rargs2)
 
 
-def accumulate(chunk : Block) -> Block:
+def accumulate(chunk : Block, prune=True, prune_threshold=1e-3) -> Block:
     '''
-    Sum chunks at the same location, skipping any that are empty
+    Sum chunks at the same location, skipping any that are empty.
+
+    Arguments:
+        prune: drop chunks whose content is everywhere below prune_threshold.
+               On by default, as it always has been.
+        prune_threshold: magnitude below which content counts as empty.
+
+    Note pruning is LOSSY: content below the threshold is discarded, not
+    merely unstored.  On the regression fixtures that costs about 2e-6 of the
+    total, which is negligible, but it is a real bias and the threshold is
+    exposed so it can be tightened or the pruning turned off outright.
+
+    Pruning does NOT interfere with autograd -- boolean-mask indexing is
+    differentiable, measured in tests/test_sim_gradient.py.  The end_to_end
+    branch removed this step believing otherwise; it did not need to.  Nor is
+    it a large memory lever: keeping the zero chunks grew an end-to-end run
+    from 142 to 154 blocks, 1.08x.  See tred-4pz.15.
     '''
     loc = chunk.location
     dat = chunk.data
@@ -153,8 +169,12 @@ def accumulate(chunk : Block) -> Block:
     summed = summed.index_add(dim=0, index=inv, source=dat, alpha=1)
 
     # Step 4: Drop zero contents
+    if not prune:
+        return Block(location=unique_locs, data=summed)
+
     # indices = torch.where(summed.sum(dim=[i+1 for i in range(chunk.vdim)]))
-    indices = torch.where((torch.abs(summed) > 1e-3).any(dim=[i+1 for i in range(chunk.vdim)]))
+    indices = torch.where((torch.abs(summed) > prune_threshold)
+                          .any(dim=[i+1 for i in range(chunk.vdim)]))
 
     return Block(location=unique_locs[indices], data=summed[indices])
 

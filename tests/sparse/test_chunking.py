@@ -186,3 +186,43 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+# accumulate() pruning is on by default but configurable.  Pruning is lossy --
+# it discards content below its threshold rather than merely not storing it --
+# so both the switch and the threshold are exposed.  See tred-4pz.15.
+
+def test_accumulate_prunes_by_default():
+    loc = torch.tensor([[0, 0], [2, 2]])
+    dat = torch.zeros((2, 2, 2))
+    dat[1] = 1.0
+    out = chunking_accumulate(Block(location=loc, data=dat))
+    assert out.nbatches == 1
+
+
+def test_accumulate_pruning_can_be_disabled():
+    loc = torch.tensor([[0, 0], [2, 2]])
+    dat = torch.zeros((2, 2, 2))
+    dat[1] = 1.0
+    out = chunking_accumulate(Block(location=loc, data=dat), prune=False)
+    assert out.nbatches == 2
+    assert out.data.sum() == dat.sum()
+
+
+def test_accumulate_pruning_is_lossy_and_the_threshold_is_adjustable():
+    '''Content under the threshold is discarded, not merely unstored.'''
+    loc = torch.tensor([[0, 0], [2, 2]])
+    dat = torch.full((2, 2, 2), 1e-6)
+    assert chunking_accumulate(Block(location=loc, data=dat)).nbatches == 0
+    kept = chunking_accumulate(Block(location=loc, data=dat), prune_threshold=1e-9)
+    assert kept.nbatches == 2
+    assert torch.isclose(kept.data.sum(), dat.sum())
+
+
+def test_accumulate_prune_disabled_keeps_totals_identical():
+    torch.manual_seed(20260824)
+    loc = torch.tensor([[0, 0], [0, 0], [2, 2], [4, 4]])
+    dat = torch.rand((4, 2, 2))
+    a = chunking_accumulate(Block(location=loc, data=dat))
+    b = chunking_accumulate(Block(location=loc, data=dat), prune=False)
+    assert torch.isclose(a.data.sum(), b.data.sum())
