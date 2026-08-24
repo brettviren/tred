@@ -3,7 +3,7 @@
 A class to hold block-sparse binned data.
 '''
 from .types import IntTensor
-from .sparse import SGrid, block_chunk, index_chunks
+from .sparse import SGrid, chunkify, index_chunks
 from .blocking import Block
 from. import chunking 
 import torch
