@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "tred_yousen",
+  "project_id": "184d907c-0e4f-4721-afc4-369d74bb3d6a"
+}
