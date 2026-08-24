@@ -19,6 +19,9 @@ def plot_transport(out):
 
 
 def plot_diffuse(out):
+    # Note the dt<0 sample: diffuse() clamps negative dt to zero, so the
+    # sigma0 curve is flat at sigma0 there rather than shrinking.  That is
+    # deliberate (tred-4pz.6), not a regression in this plot.
     dt = torch.arange(-1, 10)
     D = 1.0
     title = f'drift diffusion for {D=}'
