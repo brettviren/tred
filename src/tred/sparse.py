@@ -132,6 +132,55 @@ def fill_envelope(envelope: Block, block: Block) -> Block:
     return envelope
 
 
+def fill_envelope_index_put(envelope: Block, block: Block) -> Block:
+    '''
+    Fill envelope with block, out of place.
+
+    Same result as fill_envelope(), but built with Tensor.index_put() instead
+    of writing through a flatten() view of envelope.data.
+
+    Note what this does NOT fix.  Measured, not assumed: in the normal path,
+    where the envelope's data has just been allocated as zeros,
+    fill_envelope() already propagates gradients correctly and the two give
+    identical grads.  The in-place write is recorded by autograd and works.
+
+    Where fill_envelope() does fail is when the envelope's data is itself a
+    grad-requiring leaf, which raises
+
+        RuntimeError: a view of a leaf Variable that requires grad is being
+        used in an in-place operation
+
+    This function handles that case.  It is also the safer idiom generally:
+    the in-place form relies on flatten() returning a view, which holds only
+    while envelope.data is contiguous -- for a non-contiguous envelope
+    flatten() copies and the write is silently lost.
+
+    See tred-4pz.7.
+    '''
+    if not isinstance(envelope, Block):
+        raise TypeError(f'sparse.fill_envelope_index_put() envelope must be Block got {type(envelope)}')
+    if not isinstance(block, Block):
+        raise TypeError(f'sparse.fill_envelope_index_put() block must be Block got {type(block)}')
+
+    if not hasattr(envelope, "data"):
+        envelope.set_data(torch.zeros(envelope.size(),
+                                      dtype=block.data.dtype, device=block.data.device))
+
+    if len(block.shape) != len(envelope.shape):
+        raise ValueError(f'fill_envelope_index_put shape mismatch with block {block.shape} and envelope {envelope.shape}')
+
+    # location of block inside the envelope.
+    offset = block.location - envelope.location
+    if not torch.all(offset >= 0):
+        raise ValueError(f'fill_envelope_index_put negative locations of block {block.shape} in envelope {envelope.shape}')
+
+    inds = crop_batched(offset, block.shape, envelope.shape)
+    out = envelope.data.view(-1).index_put((inds,), block.data.reshape(-1),
+                                           accumulate=False)
+    envelope.set_data(out.view_as(envelope.data))
+    return envelope
+
+
 def reshape_envelope(envelope: Block, chunk_shape:Shape):
     '''
     Return a block which reshapes the envelope to given chunk size.
@@ -164,6 +213,23 @@ def chunkify(block: Block, shape: IntTensor) -> Block:
     sgrid = SGrid(shape)
     envelope = sgrid.envelope(block)
     fill_envelope(envelope, block)
+    return reshape_envelope(envelope, sgrid.spacing)
+
+def chunkify_bins(block: Block, shape: IntTensor) -> Block:
+    '''
+    Chunk the block into a new one with volume dimensions of given shape.
+
+    Numerically identical to chunkify(), but routed through
+    fill_envelope_index_put(), which fills out of place.  Select it via
+    ChunkSum(method='chunksum_differential').
+
+    chunkify() already propagates gradients correctly in this path -- both
+    give identical grads -- so this is about robustness, not capability.  See
+    fill_envelope_index_put() for the case that does differ.
+    '''
+    sgrid = SGrid(shape)
+    envelope = sgrid.envelope(block)
+    fill_envelope_index_put(envelope, block)
     return reshape_envelope(envelope, sgrid.spacing)
 
 def flat_index(ten, stride):

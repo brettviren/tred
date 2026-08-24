@@ -72,10 +72,16 @@ DEFAULT_FLOAT_DTYPE = torch.float64
 def to_tensor(source, device, dtype=DEFAULT_FLOAT_DTYPE):
     '''Aliasing or create a tensor if not existing.
     Result tensor will be moved to the device
+
+    Gradient-transparent: a tensor arriving with grad tracking keeps it.  This
+    used to force requires_grad=False on the way through, which silently
+    detached a leaf and raised outright on a non-leaf ("you can only change
+    requires_grad flags of leaf variables") -- so the raster could not be used
+    inside a gradient computation at all.  Inputs that do not track gradients
+    are unaffected, since they already carry requires_grad=False.
     '''
     if isinstance(source, torch.Tensor):
         t = source.to(dtype)
-        t.requires_grad = False
         t = t.to(device)
     else:
         t = torch.tensor(source, dtype=dtype, requires_grad=False,

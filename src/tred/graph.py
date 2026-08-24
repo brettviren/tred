@@ -29,7 +29,7 @@ from .raster.depos import binned as raster_depos
 from .raster.steps import compute_qeff
 
 from .types import index_dtype
-from .sparse import chunkify, chunkify2, accumulate_nd_blocks_v1, accumulate_nd_blocks_v2
+from .sparse import chunkify, chunkify_bins, chunkify2, accumulate_nd_blocks_v1, accumulate_nd_blocks_v2
 from .chunking import accumulate
 from .convo import interlaced, interlaced_symm, interlaced_symm_v2
 
@@ -58,6 +58,21 @@ def param(thing, dtype=torch.float32):
         return thing.to(dtype=dtype)
 
     return nn.Parameter(torch.tensor(thing, dtype=dtype), requires_grad=False)
+
+def to_param(thing, dtype=torch.float32, requires_grad=False, device=None):
+    '''
+    Wrap a value as an nn.Parameter that is a proper autograd leaf.
+
+    Detaching before wrapping matters: nn.Parameter() on a tensor that is
+    already part of a graph would otherwise carry that history and not be a
+    leaf, so an optimizer could not step it.
+
+    Note requires_grad defaults to False, matching param() and the rest of the
+    codebase.  Callers that want a trainable quantity ask for it explicitly.
+    '''
+    t = thing if isinstance(thing, torch.Tensor) else torch.tensor(thing)
+    t = t.to(dtype=dtype, device=device)
+    return nn.Parameter(t.detach(), requires_grad=requires_grad)
 
 def constant(node, name, thing, dtype=torch.float32):
     if isinstance(thing, torch.Tensor):
@@ -378,15 +393,31 @@ class ChunkSum(nn.Module):
             self._forward = self._chunksum_inplace_v1
         elif method == 'chunksum_inplace_v2':
             self._forward = self._chunksum_inplace_v2
+        elif method == 'chunksum_differential':
+            self._forward = self._chunksum_differential
         else:
             self._forward = None
         if self._forward is None:
-            raise ValueError(f"Available method in ChunkSum, chunksum, chunksum_inplace_v1, chunksum_inplace_v2. But {method} is given.")
+            raise ValueError(
+                f'Available methods in ChunkSum: chunksum, chunksum2, '
+                f'chunksum_inplace_v1, chunksum_inplace_v2, '
+                f'chunksum_differential. But {method} is given.')
 
     def _chunksum_inplace_v1(self, block: Block) -> Block:
         return accumulate_nd_blocks_v1(block, self._chunk_shape_tuple)
     def _chunksum_inplace_v2(self, block: Block) -> Block:
         return accumulate_nd_blocks_v2(block, self._chunk_shape_tuple)
+
+    def _chunksum_differential(self, block: Block) -> Block:
+        '''
+        As _chunksum() but filling the envelope out of place.
+
+        _chunksum() already propagates gradients correctly, so this is not
+        required for a differentiable run; it avoids an in-place write that is
+        fragile for a grad-requiring or non-contiguous envelope.  See
+        sparse.fill_envelope_index_put() and tred-4pz.7.
+        '''
+        return accumulate(chunkify_bins(block, self.chunk_shape))
 
     def _chunksum(self, block: Block) -> Block:
         '''
